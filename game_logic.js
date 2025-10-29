@@ -1,185 +1,245 @@
-// This file holds all the rules and classes for the game
-// (Snake, Food, etc.)
+// --- GAME SETTINGS ---
+const WORLD_SIZE = 3000;
+const PLAYER_START_SPEED = 2.5;
+const PLAYER_BOOST_SPEED = 4;
+const PLAYER_START_LENGTH = 15;
+const MIN_PLAYER_LENGTH = 10;
+const FOOD_COUNT = 250;
+const FOOD_SIZE = 5;
+const PLAYER_RADIUS = 10; // Snake segment radius
+const BOOST_SHRINK_RATE = 10; // Frames per segment loss
+const SEGMENT_DISTANCE = 5; // Distance between segments (PLAYER_RADIUS * 0.5)
 
+// --- FOOD CLASS ---
+class Food {
+    constructor() {
+        this.x = Math.random() * WORLD_SIZE;
+        this.y = Math.random() * WORLD_SIZE;
+        this.color = `hsl(${Math.random() * 360}, 100%, 70%)`;
+        this.size = FOOD_SIZE;
+    }
+}
+
+// --- SNAKE CLASS ---
 class Snake {
-    constructor(id, name, color, balance) {
+    constructor(id, name, initialBalance) {
         this.id = id;
         this.name = name;
-        this.color = color;
-        this.balance = balance; // This is the "money" this snake is worth
-        
-        this.x = Math.random() * GAME_WORLD_SIZE;
-        this.y = Math.random() * GAME_WORLD_SIZE;
-        this.size = 12; // Start size
-        this.speed = 3;
+        this.x = WORLD_SIZE / 2 + Math.random() * 100 - 50;
+        this.y = WORLD_SIZE / 2 + Math.random() * 100 - 50;
+        this.size = PLAYER_RADIUS;
+        this.speed = PLAYER_START_SPEED;
         this.angle = Math.random() * Math.PI * 2;
         this.body = [];
+        this.color = `hsl(${Math.random() * 360}, 100%, 50%)`;
         this.isBoosting = false;
         this.boostCounter = 0;
-        this.score = 0; // This is now "length"
-        
-        this.MAX_LENGTH = 150;
-        this.START_LENGTH = 10;
-        this.BOOST_SPEED = 5;
-        this.NORMAL_SPEED = 3;
-        this.BOOST_SHRINK_RATE = 10; // Lose 1 segment every 10 frames
+        this.isDead = false;
+        this.initialBalance = initialBalance; // The money they brought in
 
-        for (let i = 0; i < this.START_LENGTH; i++) {
-            this.body.push({ x: this.x, y: this.y });
+        // Initialize body
+        for (let i = 0; i < PLAYER_START_LENGTH; i++) {
+            this.body.push({
+                x: this.x - Math.cos(this.angle) * i * SEGMENT_DISTANCE,
+                y: this.y - Math.sin(this.angle) * i * SEGMENT_DISTANCE
+            });
         }
     }
 
     update() {
+        if (this.isDead) return;
+
         // Handle boosting
-        if (this.isBoosting) {
-            this.speed = this.BOOST_SPEED;
+        if (this.isBoosting && this.body.length > MIN_PLAYER_LENGTH) {
+            this.speed = PLAYER_BOOST_SPEED;
             this.boostCounter++;
-            if (this.boostCounter >= this.BOOST_SHRINK_RATE && this.body.length > this.START_LENGTH) {
+            if (this.boostCounter >= BOOST_SHRINK_RATE) {
                 this.body.pop(); // Shrink while boosting
-                this.score = this.body.length;
                 this.boostCounter = 0;
             }
         } else {
-            this.speed = this.NORMAL_SPEED;
+            this.speed = PLAYER_START_SPEED;
             this.boostCounter = 0;
         }
 
-        // --- Smoother Turning ---
-        // The angle is set by the server from player input
-        let head = { ...this.body[0] }; // Get a copy of the head
-        head.x += Math.cos(this.angle) * this.speed;
-        head.y += Math.sin(this.angle) * this.speed;
-
-        // Wall collision
-        if (head.x < 0 || head.x > GAME_WORLD_SIZE || head.y < 0 || head.y > GAME_WORLD_SIZE) {
-            return 'dead'; // Snake died by hitting a wall
-        }
-
-        // Add new head
-        this.body.unshift(head);
-
-        // Keep snake at max length unless it eats
-        if (this.body.length > this.MAX_LENGTH) {
-            this.body.pop();
-        }
-        
-        // Move tail segments
+        // Move body segments (from tail to head)
         for (let i = this.body.length - 1; i > 0; i--) {
-            const leader = this.body[i-1];
+            const leader = this.body[i - 1];
             const follower = this.body[i];
-            
             const dx = leader.x - follower.x;
             const dy = leader.y - follower.y;
             const dist = Math.hypot(dx, dy);
-            const desiredDist = this.size * 0.5;
 
-            if (dist > desiredDist) {
-                const moveRatio = (dist - desiredDist) / dist;
+            if (dist > SEGMENT_DISTANCE) {
+                const moveRatio = (dist - SEGMENT_DISTANCE) / dist;
                 follower.x += dx * moveRatio;
                 follower.y += dy * moveRatio;
             }
         }
-        
-        // Only keep the head, and update the body array
-        // We trim the body back to the head
-        while(this.body.length > 1) {
-            this.body.pop();
-        }
-        
-        // Now add new segments based on score
-        for (let i = 0; i < this.score; i++) {
-             this.body.push({ ...this.body[this.body.length - 1] });
-        }
 
+        // Move head
+        const head = this.body[0];
+        head.x += Math.cos(this.angle) * this.speed;
+        head.y += Math.sin(this.angle) * this.speed;
 
-        this.x = this.body[0].x;
-        this.y = this.body[0].y;
-    }
-    
-    // Check collision with other snakes
-    checkSnakeCollision(snakes) {
-        let head = this.body[0];
-        for (let snake of snakes) {
-            if (snake.id === this.id) continue; // Don't check against self
-
-            // Check collision with other snake's body
-            for (let i = 1; i < snake.body.length; i++) {
-                let segment = snake.body[i];
-                const dist = Math.hypot(head.x - segment.x, head.y - segment.y);
-                if (dist < this.size) {
-                    return snake; // We hit this snake
-                }
-            }
+        // Check Wall Collision
+        if (head.x < 0 || head.x > WORLD_SIZE || head.y < 0 || head.y > WORLD_SIZE) {
+            this.isDead = true;
         }
-        return null; // No collision
     }
 
-    // Check collision with food
-    checkFoodCollision(food) {
-        let head = this.body[0];
-        for (let i = food.length - 1; i >= 0; i--) {
-            let f = food[i];
-            const dist = Math.hypot(head.x - f.x, head.y - f.y);
-            if (dist < this.size + f.size) {
-                food.splice(i, 1); // Eat food
-                this.grow(f.value);
-                return true; // Ate food
+    grow() {
+        this.body.push({ ...this.body[this.body.length - 1] });
+    }
+
+    // Check collision with another snake's body
+    // Returns true if this snake's head hits any part of the target snake's body
+    checkCollision(targetSnake) {
+        if (this.isDead || targetSnake.isDead || this.id === targetSnake.id) {
+            return false;
+        }
+
+        const head = this.body[0];
+        // We check from i=1 to skip the target's head
+        for (let i = 1; i < targetSnake.body.length; i++) {
+            const segment = targetSnake.body[i];
+            const dist = Math.hypot(head.x - segment.x, head.y - segment.y);
+            if (dist < this.size + targetSnake.size) { // Simple circle collision
+                this.isDead = true;
+                return true; // Collision detected
             }
         }
         return false;
     }
-    
-    grow(amount = 1) {
-        this.score += amount;
-        if(this.score > this.MAX_LENGTH) {
-            this.score = this.MAX_LENGTH;
-        }
-    }
 
-    // This is what other clients see
-    getData() {
+    // Get a simplified version of the snake for sending to clients
+    getState() {
         return {
             id: this.id,
             name: this.name,
-            color: this.color,
             body: this.body,
-            balance: this.balance,
-            score: this.score,
-            size: this.size
+            color: this.color,
+            isDead: this.isDead
+            // We don't send balance here, that's handled per-player
         };
     }
 }
 
-class Food {
-    constructor() {
-        this.x = Math.random() * GAME_WORLD_SIZE;
-        this.y = Math.random() * GAME_WORLD_SIZE;
-        this.size = 5;
-        this.color = `hsl(${Math.random() * 360}, 100%, 70%)`;
-        this.value = 1; // Food from eating
+// --- GAME CLASS ---
+// This class manages the state of a single game room
+class Game {
+    constructor(roomId) {
+        this.roomId = roomId;
+        this.snakes = {}; // Key: socket.id, Value: Snake object
+        this.food = [];
+        this.killEvents = []; // To track who killed whom
+
+        // Spawn initial food
+        for (let i = 0; i < FOOD_COUNT; i++) {
+            this.food.push(new Food());
+        }
+    }
+
+    addPlayer(id, name, initialBalance) {
+        const snake = new Snake(id, name, initialBalance);
+        this.snakes[id] = snake;
+        return snake;
+    }
+
+    removePlayer(id) {
+        // When a player leaves, turn their body into food
+        if (this.snakes[id]) {
+            this.createFoodFromSnake(this.snakes[id]);
+            delete this.snakes[id];
+        }
+    }
+
+    updatePlayerAngle(id, angle) {
+        if (this.snakes[id]) {
+            this.snakes[id].angle = angle;
+        }
+    }
+
+    updatePlayerBoost(id, isBoosting) {
+        if (this.snakes[id]) {
+            this.snakes[id].isBoosting = isBoosting;
+        }
+    }
+
+    createFoodFromSnake(snake) {
+        // Drop food pellets along the snake's body
+        for (let i = 0; i < snake.body.length; i += 2) { // Drop food every 2 segments
+            const segment = snake.body[i];
+            const newFood = new Food();
+            newFood.x = segment.x + Math.random() * 10 - 5;
+            newFood.y = segment.y + Math.random() * 10 - 5;
+            this.food.push(newFood);
+        }
+    }
+
+    update() {
+        this.killEvents = []; // Clear kill events for this tick
+
+        // 1. Move all snakes
+        for (let id in this.snakes) {
+            this.snakes[id].update();
+        }
+
+        // 2. Check for collisions (snake vs snake, snake vs food)
+        const snakeIds = Object.keys(this.snakes);
+
+        for (let id of snakeIds) {
+            const snake = this.snakes[id];
+            if (!snake || snake.isDead) continue;
+
+            // Check food collision
+            for (let i = this.food.length - 1; i >= 0; i--) {
+                const f = this.food[i];
+                const head = snake.body[0];
+                const dist = Math.hypot(head.x - f.x, head.y - f.y);
+                if (dist < snake.size + f.size) {
+                    this.food.splice(i, 1); // Eat food
+                    snake.grow();
+                    this.food.push(new Food()); // Respawn food
+                }
+            }
+
+            // Check snake-on-snake collision
+            for (let otherId of snakeIds) {
+                const otherSnake = this.snakes[otherId];
+                if (!otherSnake) continue;
+
+                if (snake.checkCollision(otherSnake)) {
+                    // `snake` (the one moving) just died by hitting `otherSnake`
+                    this.createFoodFromSnake(snake);
+                    this.killEvents.push({
+                        killerId: otherSnake.id,
+                        victimId: snake.id
+                    });
+                    break; // This snake is dead, no need to check more
+                }
+            }
+        }
+
+        // Return kill events so the server can handle money transfer
+        return this.killEvents;
+    }
+
+    // Get a simplified state of the entire game for all clients
+    getState() {
+        const simpleSnakes = {};
+        for (let id in this.snakes) {
+            simpleSnakes[id] = this.snakes[id].getState();
+        }
+
+        return {
+            snakes: simpleSnakes,
+            food: this.food
+        };
     }
 }
 
-class MoneyFood extends Food {
-    constructor(x, y, value) {
-        super();
-        this.x = x;
-        this.y = y;
-        this.size = 8 + Math.log(value + 1); // Bigger food for more money
-        this.color = '#FFD700'; // Gold color
-        this.value = Math.ceil(value / 5); // The "score" (length) you get
-        this.moneyValue = value; // The "money" it's worth
-    }
-}
+// --- EXPORTS ---
+// This is the CRITICAL fix. We export the classes so server.js can use them.
+module.exports = { Game, Snake, Food };
 
-const GAME_WORLD_SIZE = 3000;
-const MAX_FOOD = 250;
-
-// This makes these classes available to server.js
-module.exports = {
-    Snake,
-    Food,
-    MoneyFood,
-    GAME_WORLD_SIZE,
-    MAX_FOOD
-};
