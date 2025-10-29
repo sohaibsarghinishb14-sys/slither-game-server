@@ -5,14 +5,15 @@ const http = require('http');
 const socketIo = require('socket.io');
 const axios = require('axios'); // To talk to your PHP backend
 const https = require('https'); // Import the HTTPS module
-const { Game } = require('./game_logic.js'); // Import our game classes
+
+// THIS IS THE FIX: We now correctly import the Game class
+const { Game } = require('./game_logic.js');
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000; // Render.com gives us the port
 
 // --- ENVIRONMENT VARIABLES ---
 // We get these from the Render.com "Environment" settings
-// This is the secure way to store passwords.
 const HOSTINGER_URL = process.env.HOSTINGER_URL;
 const SECRET_API_KEY = process.env.SECRET_API_KEY;
 
@@ -22,15 +23,12 @@ if (!HOSTINGER_URL || !SECRET_API_KEY) {
     process.exit(1); // Stop the server if config is missing
 }
 
-// --- HTTPS AGENT (THE FIX) ---
-// This creates a special "agent" for Axios that will ignore the SSL certificate error
-// from your Hostinger free domain.
+// --- HTTPS AGENT (THE FIX for Hostinger SSL) ---
 const httpsAgent = new https.Agent({
     rejectUnauthorized: false // This tells Node.js to trust the self-signed/mismatched certificate
 });
 
 // --- ROOMS CONFIGURATION ---
-// This defines your game rooms
 const ROOMS = {
     'bronze': { name: 'Bronze Room', entryFee: 1 },
     'silver': { name: 'Silver Room', entryFee: 5 },
@@ -48,30 +46,17 @@ const io = socketIo(server, {
 });
 
 // --- GAME STATE ---
-// This object will hold all our live game rooms
-// e.g., games['bronze'] = new Game();
 const games = {};
-
-// Initialize game instances for each room
 for (let roomId in ROOMS) {
+    // THIS IS THE FIX: We can now correctly create a new Game
     games[roomId] = new Game(roomId);
     console.log(`Game room '${roomId}' created.`);
 }
 
 // --- PLAYER MANAGEMENT ---
-// This object holds all connected players
-// Key: socket.id, Value: player's game data
 const players = {};
 
-// --- API FUNCTIONS ---
-// These functions talk to your Hostinger "Bank"
-
-/**
- * Asks your Hostinger PHP backend if a user is real and can play.
- * @param {string} token - The game_token from the user's session
- * @param {string} roomId - The ID of the room (e.g., 'bronze')
- * @returns {Promise<object>} - A promise that resolves with user data or rejects with an error
- */
+// --- API FUNCTIONS (Talking to Hostinger) ---
 async function verifyAndChargePlayer(token, roomId) {
     const room = ROOMS[roomId];
     if (!room) {
@@ -79,44 +64,33 @@ async function verifyAndChargePlayer(token, roomId) {
     }
 
     try {
-        // This is the "secure phone call" to your Hostinger Bank
         const response = await axios.post(`${HOSTINGER_URL}/verify_token.php`, {
             api_key: SECRET_API_KEY,
             game_token: token,
             entry_fee: room.entryFee
         }, {
-            httpsAgent: httpsAgent // We tell Axios to use our special "fix" agent
+            httpsAgent: httpsAgent // Use the fix for Hostinger SSL
         });
 
         if (response.data && response.data.success) {
-            // Player is real and has been charged.
-            return response.data;
+            return response.data; // { success: true, user: {...}, new_balance: ... }
         } else {
-            // Player is real but failed (e.g., not enough money)
             throw new Error(response.data.message || 'Verification failed');
         }
     } catch (error) {
-        // This catches network errors or 500 errors from PHP
         console.error('Error verifying token:', error.response ? error.response.data : error.message);
         throw new Error(error.response ? error.response.data.message : 'Could not contact verification server.');
     }
 }
 
-/**
- * Asks your Hostinger PHP backend to save the user's final balance.
- * @param {number} userId - The user's database ID
- * @param {number} newBalance - The user's final total balance
- * @returns {Promise<object>} - A promise that resolves with success or rejects
- */
 async function savePlayerBalance(userId, newBalance) {
     try {
-        // This is the "secure phone call" to save the money
         const response = await axios.post(`${HOSTINGER_URL}/update_balance.php`, {
             api_key: SECRET_API_KEY,
             user_id: userId,
             new_balance: newBalance
         }, {
-            httpsAgent: httpsAgent // We tell Axios to use our special "fix" agent
+            httpsAgent: httpsAgent // Use the fix for Hostinger SSL
         });
 
         if (response.data && response.data.success) {
@@ -131,17 +105,12 @@ async function savePlayerBalance(userId, newBalance) {
 }
 
 
-// --- REAL-TIME GAME LOGIC ---
-
-// This runs when a new player connects to the server
+// --- REAL-TIME GAME LOGIC (Socket.io) ---
 io.on('connection', (socket) => {
     console.log(`A user connected: ${socket.id}`);
 
     /**
      * Player wants to join a game
-     * 1. Verify their token (calls PHP)
-     * 2. If OK, charge their account (PHP does this)
-     * 3. Add them to the game
      */
     socket.on('joinGame', async (data) => {
         const { token, roomId } = data;
@@ -151,7 +120,7 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // Step 1 & 2: Verify and Charge
+            // Step 1 & 2: Verify and Charge (Talk to Hostinger)
             const { user, new_balance } = await verifyAndChargePlayer(token, roomId);
             const room = ROOMS[roomId];
 
@@ -164,7 +133,7 @@ io.on('connection', (socket) => {
                 id: socket.id,
                 db_id: user.id, // The user's ID from the database
                 username: user.username,
-                balance: user.balance, // Their *total* site balance
+                balance: new_balance, // Their *new total* site balance (after paying fee)
                 inGameBalance: room.entryFee, // The money they have in *this* game
                 snake: snake,
                 room: roomId,
@@ -174,7 +143,7 @@ io.on('connection', (socket) => {
             socket.join(roomId);
             console.log(`Player ${user.username} (Socket: ${socket.id}) joined room ${roomId}.`);
 
-            // Tell the player they are in, and what the game state is
+            // Tell the player they are in
             socket.emit('gameJoined', {
                 gameState: game.getState(),
                 playerId: socket.id,
@@ -182,7 +151,6 @@ io.on('connection', (socket) => {
             });
 
         } catch (error) {
-            // This happens if PHP says "not enough money" or "invalid token"
             console.error(`Join game error for ${socket.id}: ${error.message}`);
             socket.emit('joinError', error.message);
         }
@@ -190,7 +158,6 @@ io.on('connection', (socket) => {
 
     /**
      * Player moved their mouse
-     * We get the angle and update their snake's direction
      */
     socket.on('playerInput', (data) => {
         const player = players[socket.id];
@@ -213,21 +180,19 @@ io.on('connection', (socket) => {
 
     /**
      * Player wants to leave the game
-     * 1. Get their final in-game balance
-     * 2. Tell Hostinger to save their new *total* balance
-     * 3. Remove them from the game
      */
     socket.on('leaveGame', async () => {
         const player = players[socket.id];
         if (!player) {
-            return; // Player already left or never joined
+            return;
         }
+        
+        // This is the money they have in the game right now
+        const finalInGameBalance = player.inGameBalance;
+        // This is the *new total* they will have on the site
+        const finalTotalBalance = player.balance + finalInGameBalance;
 
-        // Calculate their final total balance
-        const inGameWinnings = player.inGameBalance - player.snake.initialBalance;
-        const finalTotalBalance = player.balance + inGameWinnings;
-
-        console.log(`Player ${player.username} leaving. In-game balance: ${player.inGameBalance}. Total balance to save: ${finalTotalBalance}`);
+        console.log(`Player ${player.username} leaving. In-game: ${finalInGameBalance}. Saving new total: ${finalTotalBalance}`);
 
         try {
             // Save the new total balance to the main database
@@ -238,7 +203,7 @@ io.on('connection', (socket) => {
             socket.emit('leaveError', 'Could not save your balance. Please contact support.');
         }
 
-        // Remove player from the game, regardless of save success
+        // Remove player from the game
         const game = games[player.room];
         if (game) {
             game.removePlayer(socket.id);
@@ -249,7 +214,6 @@ io.on('connection', (socket) => {
 
     /**
      * Player disconnected (closed browser)
-     * This is like 'leaveGame', but we can't tell the user anything
      */
     socket.on('disconnect', async () => {
         console.log(`A user disconnected: ${socket.id}`);
@@ -257,17 +221,15 @@ io.on('connection', (socket) => {
         
         if (player) {
             // Player was in a game, we must save their balance
-            const inGameWinnings = player.inGameBalance - player.snake.initialBalance;
-            const finalTotalBalance = player.balance + inGameWinnings;
+            const finalInGameBalance = player.inGameBalance;
+            const finalTotalBalance = player.balance + finalInGameBalance;
             
             console.log(`Player ${player.username} disconnected. Saving final balance: ${finalTotalBalance}`);
 
             try {
-                // Save the new total balance to the main database
                 await savePlayerBalance(player.db_id, finalTotalBalance);
             } catch (error) {
                 console.error(`Failed to save balance on disconnect for ${player.username}: ${error.message}`);
-                // We can't tell the user, they are already gone
             }
 
             // Remove player from the game
@@ -281,8 +243,6 @@ io.on('connection', (socket) => {
 });
 
 // --- GAME LOOP ---
-// This is the "heartbeat" of the game.
-// 20 times per second, it updates the game and sends the new state to all players.
 const TICK_RATE = 20; // 20 updates per second
 const aTICK_TIME = 1000 / TICK_RATE;
 
