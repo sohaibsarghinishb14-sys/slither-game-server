@@ -4,6 +4,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const axios = require('axios'); // To talk to your PHP backend
+const https = require('https'); // Import the HTTPS module
 const { Game } = require('./game_logic.js'); // Import our game classes
 
 // --- CONFIGURATION ---
@@ -20,6 +21,13 @@ if (!HOSTINGER_URL || !SECRET_API_KEY) {
     console.error("Please add them to your Render.com Environment settings.");
     process.exit(1); // Stop the server if config is missing
 }
+
+// --- HTTPS AGENT (THE FIX) ---
+// This creates a special "agent" for Axios that will ignore the SSL certificate error
+// from your Hostinger free domain.
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false // This tells Node.js to trust the self-signed/mismatched certificate
+});
 
 // --- ROOMS CONFIGURATION ---
 // This defines your game rooms
@@ -76,6 +84,8 @@ async function verifyAndChargePlayer(token, roomId) {
             api_key: SECRET_API_KEY,
             game_token: token,
             entry_fee: room.entryFee
+        }, {
+            httpsAgent: httpsAgent // We tell Axios to use our special "fix" agent
         });
 
         if (response.data && response.data.success) {
@@ -105,6 +115,8 @@ async function savePlayerBalance(userId, newBalance) {
             api_key: SECRET_API_KEY,
             user_id: userId,
             new_balance: newBalance
+        }, {
+            httpsAgent: httpsAgent // We tell Axios to use our special "fix" agent
         });
 
         if (response.data && response.data.success) {
@@ -313,5 +325,8 @@ server.listen(PORT, () => {
     console.log(`--- Slither Game Server ---`);
     console.log(`Server is live and running on port ${PORT}`);
     console.log(`Connecting to Hostinger at: ${HOSTINGER_URL}`);
+    if (httpsAgent.options.rejectUnauthorized === false) {
+        console.log("WARNING: Ignoring SSL certificate errors. (This is the fix for Hostinger free domain).");
+    }
 });
 
