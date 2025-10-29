@@ -18,11 +18,15 @@ const io = new Server(server, {
     }
 });
 
-// We will change this URL later to your real Hostinger website URL
-const YOUR_HOSTINGER_URL = "https://your-website.com";
+// --- CONFIGURATION ---
+// This is your "Bank" (Hostinger) URL
+const YOUR_HOSTINGER_URL = "https://lightblue-mosquito-533363.hostersite.com";
+// This is your secret password from update_balance.php
+const SECRET_API_KEY = "MoroccoGame_777";
+// --- END CONFIGURATION ---
+
 
 // --- GAME ROOMS ---
-// This is the "DamnBruh" setup
 const ROOMS = [
     { id: 'room1', name: 'Bronze Room', cost: 1 },
     { id: 'room2', name: 'Silver Room', cost: 5 },
@@ -32,11 +36,9 @@ const ROOMS = [
 let gameInterval;
 const TICK_RATE = 30; // 30 times per second
 
-// All snakes and food, separated by room
 let snakes = {};
 let food = {};
 
-// Initialize game state for all rooms
 function initGame() {
     console.log("Initializing game rooms...");
     for (const room of ROOMS) {
@@ -47,35 +49,30 @@ function initGame() {
         }
     }
     
-    // Start the game loop
     if (gameInterval) clearInterval(gameInterval);
     gameInterval = setInterval(gameLoop, 1000 / TICK_RATE);
     console.log("Game server is running!");
 }
 
 // --- GAME LOOP ---
-// This runs 30 times every second
 function gameLoop() {
     for (const room of ROOMS) {
         const roomSnakes = snakes[room.id];
         const roomFood = food[room.id];
 
-        if (roomSnakes.length === 0) continue; // Skip empty rooms
+        if (roomSnakes.length === 0) continue; 
 
-        // 1. Update all snakes
         for (let i = roomSnakes.length - 1; i >= 0; i--) {
             const snake = roomSnakes[i];
             const state = snake.update();
             
             if (state === 'dead') {
-                // Snake hit a wall
                 console.log(`${snake.name} hit a wall.`);
                 handlePlayerDeath(snake, null, room.id);
                 roomSnakes.splice(i, 1);
                 continue;
             }
 
-            // 2. Check for snake-on-snake collisions
             const hitSnake = snake.checkSnakeCollision(roomSnakes);
             if (hitSnake) {
                 console.log(`${snake.name} was killed by ${hitSnake.name}`);
@@ -84,16 +81,13 @@ function gameLoop() {
                 continue;
             }
 
-            // 3. Check for food collisions
             if (snake.checkFoodCollision(roomFood)) {
-                // Ate food, add a new one
                 if (roomFood.length < MAX_FOOD) {
                     roomFood.push(new Food());
                 }
             }
         }
 
-        // 4. Send the new game state to all players in this room
         const gameState = {
             snakes: roomSnakes.map(s => s.getData()),
             food: roomFood
@@ -104,26 +98,22 @@ function gameLoop() {
 
 // --- PLAYER DEATH ---
 function handlePlayerDeath(deadSnake, killerSnake, roomId) {
-    // 1. Tell the dead player they died
     io.to(deadSnake.id).emit('youDied', {
         killedBy: killerSnake ? killerSnake.name : 'The Wall'
     });
 
-    // 2. Drop "Money Food"
     const roomFood = food[roomId];
     
-    // Create one big "Money Food" pellet where the snake died
+    // Create one big "Money Food" pellet
     const moneyPellet = new MoneyFood(
         deadSnake.x,
         deadSnake.y,
-        deadSnake.balance // The pellet is worth the dead snake's balance
+        deadSnake.balance 
     );
     roomFood.push(moneyPellet);
 
-    // 3. Update balances
     if (killerSnake) {
         killerSnake.balance += deadSnake.balance;
-        // Tell the killer they earned money
         io.to(killerSnake.id).emit('kill', {
             victimName: deadSnake.name,
             amount: deadSnake.balance,
@@ -131,7 +121,6 @@ function handlePlayerDeath(deadSnake, killerSnake, roomId) {
         });
     }
     
-    // The dead snake's balance is now 0
     deadSnake.balance = 0;
 }
 
@@ -140,44 +129,41 @@ function handlePlayerDeath(deadSnake, killerSnake, roomId) {
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
-    // Send the list of rooms to the new player
     socket.emit('roomList', ROOMS);
 
-    // Player tries to join a room
     socket.on('joinRoom', async (data) => {
         try {
-            const { roomId, token } = data;
+            const { roomId, token, cost } = data;
             const room = ROOMS.find(r => r.id === roomId);
             if (!room) {
                 return socket.emit('joinError', 'Room not found.');
             }
-
-            console.log(`Player joining room ${roomId} with token ${token}`);
-
+            
             // --- SECURITY CHECK ---
             // Ask your PHP "Bank" (Hostinger) if this token is real
-            const response = await axios.post(`${YOUR_HOSTINGER_URL}/verify_token.php`, { token });
+            const response = await axios.post(`${YOUR_HOSTINGER_URL}/verify_token.php`, { 
+                token: token,
+                cost: room.cost // Send the cost to be subtracted
+            });
 
             if (response.data.success) {
                 const user = response.data.user;
                 
-                // 1. Check if user has enough money
+                // Check if user has enough money (PHP already checked, but we double-check)
                 if (user.balance < room.cost) {
                     return socket.emit('joinError', `You need $${room.cost} to join. You only have $${user.balance}.`);
                 }
 
-                // 2. Create the new snake
                 const newSnake = new Snake(
                     socket.id,
                     user.username,
-                    user.color || `hsl(${Math.random() * 360}, 100%, 50%)`,
-                    room.cost // The snake's life is worth the room cost
+                    `hsl(${Math.random() * 360}, 100%, 50%)`,
+                    room.cost 
                 );
                 
                 snakes[roomId].push(newSnake);
                 socket.join(roomId);
                 
-                // 3. Tell the player they are in
                 socket.emit('joinSuccess', {
                     room: room.name,
                     balance: newSnake.balance
@@ -186,7 +172,7 @@ io.on('connection', (socket) => {
                 console.log(`${user.username} (Socket ${socket.id}) joined ${room.name}`);
 
             } else {
-                return socket.emit('joinError', 'Invalid user token. Please log in again.');
+                return socket.emit('joinError', response.data.message || 'Invalid user token.');
             }
         } catch (error) {
             console.error("Join room error:", error.message);
@@ -194,9 +180,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Player sends their mouse movement
     socket.on('updateAngle', (angle) => {
-        // Find the snake for this socket
         let snake = null;
         for (const roomId in snakes) {
             snake = snakes[roomId].find(s => s.id === socket.id);
@@ -208,7 +192,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Player sends boost state
     socket.on('updateBoost', (isBoosting) => {
         let snake = null;
         for (const roomId in snakes) {
@@ -221,7 +204,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Player leaves the game (disconnects or "Q" key)
     socket.on('leaveGame', () => {
         handleDisconnect();
     });
@@ -235,33 +217,30 @@ io.on('connection', (socket) => {
         let snake = null;
         let roomId = null;
         
-        // Find and remove snake from the game
         for (const rId in snakes) {
             const index = snakes[rId].findIndex(s => s.id === socket.id);
             if (index !== -1) {
                 snake = snakes[rId][index];
                 roomId = rId;
-                snakes[rId].splice(index, 1); // Remove snake
+                snakes[rId].splice(index, 1); 
                 break;
             }
         }
 
         if (snake && snake.balance > 0) {
-            // Player left with money! Save it to their "Bank" (Hostinger)
             console.log(`Saving balance for ${snake.name}: $${snake.balance}`);
             try {
-                // We will update this URL later
+                // Send the winnings back to the "Bank" (Hostinger)
                 await axios.post(`${YOUR_HOSTINGER_URL}/update_balance.php`, {
-                    user_id: snake.name, // We used username as the ID
-                    new_balance: snake.balance
+                    api_key: SECRET_API_KEY,      // The secret password
+                    username: snake.name,         // The player's username
+                    winnings: snake.balance       // The money they won
                 });
                 console.log(`Balance saved for ${snake.name}.`);
             } catch (error) {
                 console.error(`Failed to save balance for ${snake.name}:`, error.message);
-                // What to do here? Maybe email yourself?
             }
         } else if (snake) {
-            // Player died and had 0 balance, just left
             console.log(`${snake.name} left the game with $0.`);
         }
     }
@@ -272,3 +251,4 @@ server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
     initGame();
 });
+
