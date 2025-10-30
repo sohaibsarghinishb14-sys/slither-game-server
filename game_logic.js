@@ -1,311 +1,277 @@
-// --- GAME SETTINGS ---
+// This is the correct "FINAL" game_logic.js from your summary.
+// It is compatible with your "FINAL" server.js.
+
+// --- Game Settings ---
 const WORLD_SIZE = 3000;
-const PLAYER_START_SPEED = 3;
-const PLAYER_BOOST_SPEED = 6;
-const PLAYER_BOOST_COST = 1; // Cost per game tick (not frame)
-const PLAYER_START_LENGTH = 15;
-const MIN_PLAYER_LENGTH = 10;
-const FOOD_COUNT = 300;
+const PLAYER_START_SPEED = 2.5;
+const PLAYER_BOOST_SPEED = 5;
+const PLAYER_START_SIZE = 10;
+const PLAYER_MIN_LENGTH = 10;
+const FOOD_COUNT = 250;
 const FOOD_SIZE = 5;
-const SNAKE_TURN_SPEED = 0.07;
-const SNAKE_SIZE = 12; // Radius of segments
+const FOOD_VALUE = 0.01; // How much balance each food pellet is worth
+const BOOST_COST = 0.02; // How much balance is lost per tick when boosting
+const SEGMENT_DISTANCE = 5; // Distance between body segments
 
-// --- Helper: Point Class ---
-class Point {
-    constructor(x = 0, y = 0) {
-        this.x = x;
-        this.y = y;
-    }
+// --- Helper Functions ---
+function getRandomColor() {
+    return `hsl(${Math.random() * 360}, 100%, 50%)`;
+}
+function getRandomPosition() {
+    return {
+        x: Math.random() * (WORLD_SIZE - 100) + 50,
+        y: Math.random() * (WORLD_SIZE - 100) + 50
+    };
+}
+function getDistance(obj1, obj2) {
+    return Math.hypot(obj1.x - obj2.x, obj1.y - obj2.y);
 }
 
-// --- Food Class ---
-class Food {
-    constructor() {
-        this.x = Math.random() * WORLD_SIZE;
-        this.y = Math.random() * WORLD_SIZE;
-        this.size = FOOD_SIZE;
-        this.color = `hsl(${Math.random() * 360}, 100%, 70%)`;
-        this.id = Math.random().toString(36).substr(2, 9);
-    }
-}
 
 // --- Snake Class ---
 class Snake {
     constructor(id, username, startBalance) {
         this.id = id;
         this.username = username;
-        this.x = WORLD_SIZE / 2 + (Math.random() - 0.5) * 500;
-        this.y = WORLD_SIZE / 2 + (Math.random() - 0.5) * 500;
-        this.size = SNAKE_SIZE;
+        this.balance = startBalance; // Balance is now our "score"
+        this.size = PLAYER_START_SIZE;
         this.speed = PLAYER_START_SPEED;
         this.angle = Math.random() * Math.PI * 2;
-        this.targetAngle = this.angle;
-        this.body = [];
-        this.color = `hsl(${Math.random() * 360}, 100%, 50%)`;
+        this.color = getRandomColor();
         this.isBoosting = false;
         
-        // This is the player's "game money"
-        this.balance = startBalance;
+        const startPos = getRandomPosition();
+        this.body = [];
+        // Calculate length based on balance
+        let length = PLAYER_MIN_LENGTH + Math.floor(this.balance / FOOD_VALUE);
+        if (length < PLAYER_MIN_LENGTH) length = PLAYER_MIN_LENGTH;
         
-        // Length is derived from balance. 1 balance = 1 length
-        // We add PLAYER_START_LENGTH as a "base" length
-        let startLength = PLAYER_START_LENGTH + this.balance;
-
-        for (let i = 0; i < startLength; i++) {
-            this.body.push({ x: this.x - i * 5, y: this.y });
+        for (let i = 0; i < length; i++) {
+            this.body.push({
+                x: startPos.x - Math.cos(this.angle) * i * SEGMENT_DISTANCE,
+                y: startPos.y - Math.sin(this.angle) * i * SEGMENT_DISTANCE
+            });
         }
+    }
+    
+    get head() {
+        return this.body[0];
+    }
+    
+    get length() {
+        return this.body.length;
     }
 
     update() {
-        // --- Boosting ---
-        if (this.isBoosting && this.balance > MIN_PLAYER_LENGTH) {
+        // 1. Set speed based on boosting
+        if (this.isBoosting && this.balance > BOOST_COST) {
             this.speed = PLAYER_BOOST_SPEED;
-            this.balance -= PLAYER_BOOST_COST; // Decrease "money"
-            if (this.body.length > PLAYER_START_LENGTH) {
-                 this.body.pop(); // Remove from tail
+            // Cost of boosting
+            this.balance -= BOOST_COST; 
+            
+            // Only shrink if we have more than min length
+            if (this.length > PLAYER_MIN_LENGTH) {
+                 this.body.pop(); // Remove tail segment
             }
+           
         } else {
             this.speed = PLAYER_START_SPEED;
         }
 
-        // --- Turning ---
-        let angleDiff = this.targetAngle - this.angle;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        this.angle += angleDiff * SNAKE_TURN_SPEED;
+        // 2. Move body segments (from tail to head)
+        for (let i = this.length - 1; i > 0; i--) {
+            const leader = this.body[i - 1];
+            const follower = this.body[i];
+            
+            const dx = leader.x - follower.x;
+            const dy = leader.y - follower.y;
+            const dist = Math.hypot(dx, dy);
 
-        // --- Move Head ---
-        const head = this.body[0];
-        const newHeadX = head.x + Math.cos(this.angle) * this.speed;
-        const newHeadY = head.y + Math.sin(this.angle) * this.speed;
-        
-        // Add new head
-        this.body.unshift({ x: newHeadX, y: newHeadY });
-        
-        // Keep length correct (remove tail)
-        // We add +1 because the "balance" is the *extra* length
-        while (this.body.length > this.balance + PLAYER_START_LENGTH + 1) {
-            this.body.pop();
-        }
-
-        // Update main position
-        this.x = newHeadX;
-        this.y = newHeadY;
-    }
-    
-    // Grow by eating food
-    eatFood(food) {
-        this.balance += 1; // 1 food = 1 balance
-        // The body will naturally grow on the next update because we don't pop()
-    }
-
-    // Called when this snake kills another
-    killSnake(otherSnake) {
-        // Gain 90% of the other snake's balance
-        this.balance += Math.floor(otherSnake.balance * 0.90);
-    }
-    
-    // Check for collision with world boundaries
-    checkWallCollision() {
-        const head = this.body[0];
-        return (head.x < 0 || head.x > WORLD_SIZE || head.y < 0 || head.y > WORLD_SIZE);
-    }
-    
-    // Check for collision with another snake's body
-    checkSnakeCollision(otherSnake) {
-        const head = this.body[0];
-        // Check collision with all segments except the head
-        for (let i = 1; i < otherSnake.body.length; i++) {
-            const segment = otherSnake.body[i];
-            const dist = Math.hypot(head.x - segment.x, head.y - segment.y);
-            if (dist < this.size) { // Simple circle collision
-                return true;
+            if (dist > SEGMENT_DISTANCE) {
+                const moveRatio = (dist - SEGMENT_DISTANCE) / dist;
+                follower.x += dx * moveRatio;
+                follower.y += dy * moveRatio;
             }
         }
-        return false;
+
+        // 3. Move head
+        this.head.x += Math.cos(this.angle) * this.speed;
+        this.head.y += Math.sin(this.angle) * this.speed;
+        
+        // 4. Check wall collision
+        if (this.head.x < 0 || this.head.x > WORLD_SIZE || this.head.y < 0 || this.head.y > WORLD_SIZE) {
+            return 'dead'; // Player died
+        }
+        return 'alive';
     }
     
-    // Check for collision with food
-    checkFoodCollision(foodList) {
-        const head = this.body[0];
-        for (let i = foodList.length - 1; i >= 0; i--) {
-            const food = foodList[i];
-            const dist = Math.hypot(head.x - food.x, head.y - food.y);
-            if (dist < this.size + food.size) {
-                return foodList.splice(i, 1)[0]; // Return the food that was eaten
-            }
-        }
-        return null;
+    // Add one segment to the tail
+    grow() {
+        this.body.push({ ...this.body[this.length - 1] });
     }
 
-    // Create a simplified version of the snake to send to clients
-    getPublicData() {
+    // This returns a simplified object for sending to clients
+    getState() {
         return {
             id: this.id,
             username: this.username,
+            balance: this.balance,
+            size: this.size,
+            angle: this.angle,
             color: this.color,
-            body: this.body,
-            balance: Math.floor(this.balance)
+            body: this.body
         };
     }
 }
 
+
 // --- Game Class ---
-// This class runs the game logic for one "Room"
+// This class manages an entire room (like "Bronze Room")
 class Game {
     constructor(roomId) {
         this.roomId = roomId;
-        this.snakes = {}; // Use an object for quick lookup
+        this.players = {}; // Stores all Snake objects
         this.food = [];
         this.lastUpdateTime = Date.now();
-        this.gameInterval = null;
-
-        // Spawn initial food
+        
+        // Create initial food
         for (let i = 0; i < FOOD_COUNT; i++) {
-            this.food.push(new Food());
+            this.spawnFood();
         }
     }
 
-    // Start the game loop
-    start() {
-        this.lastUpdateTime = Date.now();
-        // Run the game loop at 25 ticks per second (40ms)
-        this.gameInterval = setInterval(() => this.tick(), 1000 / 25);
-        console.log(`Game room ${this.roomId} started.`);
+    spawnFood(position = null) {
+        const pos = position || getRandomPosition();
+        this.food.push({
+            x: pos.x,
+            y: pos.y,
+            size: FOOD_SIZE,
+            color: `hsl(${Math.random() * 360}, 100%, 70%)`
+        });
     }
 
-    // Stop the game loop
-    stop() {
-        if (this.gameInterval) {
-            clearInterval(this.gameInterval);
-        }
-        console.log(`Game room ${this.roomId} stopped.`);
-    }
-    
-    // Add a new player to the game
-    addSnake(socket, username, startBalance) {
-        const snake = new Snake(socket.id, username, startBalance);
-        this.snakes[socket.id] = snake;
-        return snake;
-    }
-    
-    // Remove a player from the game
-    removeSnake(socketId) {
-        const snake = this.snakes[socketId];
-        if (snake) {
-            // Drop food where the snake died
-            this.dropFood(snake);
-            delete this.snakes[socketId];
-            return snake;
-        }
-        return null;
-    }
-    
-    // Handle player input
-    handleInput(socketId, data) {
-        const snake = this.snakes[socketId];
-        if (snake) {
-            if (data.angle !== undefined) {
-                snake.targetAngle = data.angle;
-            }
-            if (data.boosting !== undefined) {
-                snake.isBoosting = data.boosting;
-            }
-        }
-    }
-    
-    // Create food where a snake died
-    dropFood(snake) {
-        // Drop food based on the snake's balance
-        const foodToDrop = Math.floor(snake.balance / 2);
-        for (let i = 0; i < foodToDrop; i++) {
-            const newFood = new Food();
-            // Scatter food around the snake's head
-            newFood.x = snake.x + (Math.random() - 0.5) * snake.body.length * 0.5;
-            newFood.y = snake.y + (Math.random() - 0.5) * snake.body.length * 0.5;
-            // Clamp to world boundaries
-            newFood.x = Math.max(0, Math.min(WORLD_SIZE, newFood.x));
-            newFood.y = Math.max(0, Math.min(WORLD_SIZE, newFood.y));
-            this.food.push(newFood);
-        }
+    addPlayer(socket, userData, entryFee) {
+        // This function expects the full `socket` object
+        const player = new Snake(socket.id, userData.username, entryFee);
+        this.players[socket.id] = player;
+        return player;
     }
 
-    // The main game loop tick
-    tick() {
+    removePlayer(id) {
+        const player = this.players[id];
+        delete this.players[id];
+        return player; // Return the player who was removed
+    }
+
+    handlePlayerInput(id, input) {
+        const player = this.players[id];
+        if (player) {
+            player.angle = input.angle;
+            player.isBoosting = input.boost;
+        }
+    }
+    
+    // This is the main game loop, run by server.js
+    update() {
         const now = Date.now();
         const deltaTime = (now - this.lastUpdateTime) / 1000; // Time in seconds
         this.lastUpdateTime = now;
-        
-        const snakeIds = Object.keys(this.snakes);
-        const allSnakes = Object.values(this.snakes);
-        
-        let eatenFoodIds = [];
-        let deadSnakeIds = [];
-        let killEvents = []; // To track who killed whom
 
-        // 1. Update all snake positions
-        for (const snake of allSnakes) {
-            snake.update();
+        const deadPlayers = [];
+        
+        // 1. Update all players
+        for (const id in this.players) {
+            const player = this.players[id];
+            const state = player.update();
+            if (state === 'dead') {
+                deadPlayers.push(id);
+            }
         }
+        
+        // 2. Check collisions
+        for (const id in this.players) {
+            const player = this.players[id];
+            if (!player) continue;
 
-        // 2. Check for collisions
-        for (const snakeId of snakeIds) {
-            const snake = this.snakes[snakeId];
-            if (!snake) continue; // Snake might have been killed already
-
-            // 2a. Check wall collision
-            if (snake.checkWallCollision()) {
-                deadSnakeIds.push(snakeId);
-                continue; // Move to next snake
+            // 2a. Check food collision
+            for (let i = this.food.length - 1; i >= 0; i--) {
+                const f = this.food[i];
+                const dist = getDistance(player.head, f);
+                if (dist < player.size + f.size) {
+                    this.food.splice(i, 1); // Eat food
+                    player.grow();
+                    player.balance += FOOD_VALUE;
+                    this.spawnFood(); // Spawn new food
+                }
             }
             
             // 2b. Check snake-on-snake collision
-            for (const otherSnake of allSnakes) {
-                if (snake.id === otherSnake.id) continue; // Can't collide with self
+            for (const otherId in this.players) {
+                if (id === otherId) continue;
+                const otherPlayer = this.players[otherId];
                 
-                if (snake.checkSnakeCollision(otherSnake)) {
-                    deadSnakeIds.push(snakeId);
-                    // The otherSnake gets the "kill"
-                    killEvents.push({ killer: otherSnake, victim: snake });
-                    break; // This snake is dead, stop checking
+                // Check if player's head hit any part of otherPlayer's body
+                for (let i = 0; i < otherPlayer.length; i++) {
+                    const segment = otherPlayer.body[i];
+                    const dist = getDistance(player.head, segment);
+                    if (dist < player.size) { // Hit!
+                        // The killer (otherPlayer) gets the victim's (player) balance
+                        if (otherPlayer) {
+                             otherPlayer.balance += player.balance;
+                        }
+                        deadPlayers.push(id);
+                        break;
+                    }
                 }
-            }
-            if (deadSnakeIds.includes(snakeId)) continue; // Snake is dead, no need to check food
-
-            // 2c. Check food collision
-            const eatenFood = snake.checkFoodCollision(this.food);
-            if (eatenFood) {
-                snake.eatFood(eatenFood);
-                eatenFoodIds.push(eatenFood.id);
+                // Break outer loop if player is already marked dead
+                if (deadPlayers.includes(id)) break;
             }
         }
         
-        // 3. Process kills
-        for (const event of killEvents) {
-            event.killer.killSnake(event.victim);
-        }
+        // 3. Remove dead players and drop their food
+        for (const id of deadPlayers) {
+            const deadPlayer = this.players[id];
+            if (!deadPlayer) continue;
 
-        // 4. Spawn new food to replace eaten ones
-        for (let i = 0; i < eatenFoodIds.length; i++) {
-            this.food.push(new Food());
+            // Drop all their balance as food pellets
+            const foodToDrop = deadPlayer.length;
+            for (let i = 0; i < foodToDrop; i++) {
+                // Drop food pellets along the snake's body
+                this.spawnFood(deadPlayer.body[i]);
+            }
+            
+            // Tell the server this player is dead
+            const socket = io.sockets.sockets.get(id);
+            if (socket) {
+                socket.emit('player-died', 'You were killed! Your balance was transferred.');
+                this.removePlayer(id);
+                socket.leave(this.roomId);
+            }
         }
-
-        // 5. Get state for all players
-        const gameState = {
-            snakes: allSnakes.map(s => s.getPublicData()),
-            food: this.food.map(f => ({ id: f.id, x: f.x, y: f.y, color: f.color })),
-            eatenFood: eatenFoodIds,
-            deadSnakes: deadSnakeIds.map(id => {
-                const deadSnake = this.removeSnake(id); // Remove from game
-                return { id: id, balance: deadSnake ? deadSnake.balance : 0 };
-            })
+    }
+    
+    // Get a simplified state to send to all clients
+    getState() {
+        const simplePlayers = {};
+        for (const id in this.players) {
+            simplePlayers[id] = this.players[id].getState();
+        }
+        
+        return {
+            worldSize: WORLD_SIZE,
+            food: this.food,
+            players: simplePlayers
         };
-        
-        return gameState;
     }
 }
 
-// --- This is the fix for the "Game is not a constructor" error ---
-// We "export" the Game class so server.js can import it.
+// --- This is the fix for the `Game is not a constructor` error ---
+// We export the Game class so server.js can import it.
 module.exports = { Game };
 
+// We need a global `io` variable for the Game class to be able to
+// emit messages to players. This is set by server.js.
+let io;
+module.exports.init = (socketIoInstance) => {
+    io = socketIoInstance;
+};
